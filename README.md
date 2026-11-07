@@ -222,11 +222,15 @@ CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/artex
 
 **并发**：每个任务的 work agent 数在「系统设置」里配置（默认 3）。
 
-**常用参数**：`./start.sh -addr :8787 -proxy :8788`（`-addr` 前端+API，`-proxy` 流量录制代理）。启动脚本会把参数原样透传给 `artex`。
+**常用参数**：`./start.sh -addr 127.0.0.1:8787 -proxy 127.0.0.1:8788`（`-addr` 前端+API，`-proxy` 流量录制代理）。启动脚本会把参数原样透传给 `artex`。
+
+> **监听地址（安全默认）**：管理端口默认只监听 `127.0.0.1:8787`，流量录制代理默认只监听 `127.0.0.1:8788`。也就是说开箱即用时只有本机能访问；公网使用请走下面的反向代理/隧道，不要用 `-addr :8787` 把管理端口直接暴露到公网。`docker compose` 同样把宿主机端口绑定在 `127.0.0.1`。
 
 ### 反向代理部署（HTTPS / 只开放 443）
 
-前端和 API/SSE 都由同一个后端端口（默认 `:8787`）提供，实时活动流默认走**同源**地址，因此**无需配置 `NEXT_PUBLIC_SSE_BASE`**，公网只开放 443、把 8787 留在内网即可。
+前端和 API/SSE 都由同一个后端端口（默认 `127.0.0.1:8787`）提供，实时活动流默认走**同源**地址，因此**无需配置 `NEXT_PUBLIC_SSE_BASE`**，公网只开放 443、把 8787 留在内网即可。没有域名/证书时也可以用 SSH 隧道：`ssh -L 8787:127.0.0.1:8787 user@server`，然后本地打开 `http://127.0.0.1:8787`。
+
+反向代理除了终止 TLS，还应在转发时带上真实客户端地址（`X-Forwarded-For` / `X-Real-IP`），并在 artex 一侧设置 `ARTEX_TRUST_PROXY_HEADERS=1`。否则未认证接口的限流与登录失败锁定会把所有请求都算到反代这一个 IP 上（`ARTEX_TRUST_PROXY_HEADERS` 默认关闭：直接暴露端口时客户端可以伪造这些头，信任它们等于没有限流）。
 
 SSE 是长连接 + 持续推送，反代**必须关闭缓冲**，否则浏览器能连上却收不到事件（表现为活动流一直转圈）。Nginx 示例：
 
@@ -240,6 +244,9 @@ server {
         proxy_pass http://127.0.0.1:8787;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
+        # 真实客户端地址：配合 artex 的 ARTEX_TRUST_PROXY_HEADERS=1 使用
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 
         # SSE 关键项：关缓冲、长超时、HTTP/1.1
         proxy_buffering off;
@@ -252,6 +259,18 @@ server {
 ```
 
 > 仅当 SSE 需要走与页面不同的来源（如独立子域）时，才在**构建期**设置 `NEXT_PUBLIC_SSE_BASE`（该变量在 `next build` 时固化进静态包，容器运行时再设无效）。
+
+### 认证与 MCP 安全加固
+
+以下都是 v0.3.15 之后补的纵深防御项，默认配置保持旧行为/可用性，需要时按需收紧：
+
+- **初始化入口限流**：`POST /api/auth/init` 每来源 IP 每分钟最多 5 次，且最多 2 个并发请求在跑 bcrypt；超限返回 `429`。登录失败按来源 IP 计数，15 分钟内失败 5 次锁定 15 分钟（`429` + `Retry-After`）。
+- **审计日志**：登录、改密、初始化成功/失败都会输出 `[auth-audit] event=... result=... ip=... user=...` 一行到服务日志（`/logs` 页面可见）。只记录事件、结果与来源，**不记录密码、哈希或请求正文**。
+- **JWT 绑定密码版本**：令牌里带当前管理员密码哈希的指纹；改密或 `reset-password.sh` 改写哈希后，旧令牌在服务端校验时立即失效（多实例/带外改密同样生效）。改密接口会返回新令牌，执行改密的会话不会掉线，其他会话需重新登录。升级到本版本时，旧版签发的令牌没有指纹，也会被要求重新登录。
+- **stdio MCP 策略**（环境变量，全部可选）：
+  - `ARTEX_MCP_STDIO_DISABLED=1`：禁止新建 stdio MCP 连接；
+  - `ARTEX_MCP_STDIO_ALLOWLIST=npx @playwright/mcp,/usr/local/bin/node`：命令 + 参数前缀白名单，空值不限制；
+  - `ARTEX_MCP_STDIO_RUN_AS=artex`：在 root 运行时用 `setpriv` 把 MCP 子进程降权到指定非 root 用户（需要 util-linux 的 `setpriv`；找不到时拒绝启动子进程）。默认不降权，容器内仍以 artex 进程用户运行。
 
 ---
 
