@@ -27,7 +27,18 @@ func connectMCP(ctx context.Context, m *db.MCPServer) (mcpClient, error) {
 		if m.Command == "" {
 			return nil, fmt.Errorf("stdio 传输缺少命令")
 		}
-		return mcp.NewStdioClient(ctx, m.Name, m.Command, jsonStrMap(m.Env), jsonStrSlice(m.Args)...)
+		// stdio spawns a local child with the process's own privileges. Apply the
+		// optional operator policy (disable / command allowlist / run-as) before
+		// the only exec site in the codebase.
+		policy, err := loadStdioPolicy()
+		if err != nil {
+			return nil, err
+		}
+		command, args, env, err := policy.prepare(m.Command, jsonStrSlice(m.Args), jsonStrMap(m.Env))
+		if err != nil {
+			return nil, err
+		}
+		return mcp.NewStdioClient(ctx, m.Name, command, env, args...)
 	case "http":
 		if m.URL == "" {
 			return nil, fmt.Errorf("http 传输缺少 URL")
