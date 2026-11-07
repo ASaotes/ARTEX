@@ -27,8 +27,16 @@ services:
       ARTEX_LLM_MODEL: ${ARTEX_LLM_MODEL:-}
       ARTEX_LLM_BASE_URL: ${ARTEX_LLM_BASE_URL:-}
       ARTEX_LLM_PROXY: ${ARTEX_LLM_PROXY:-}
+      # 管理端口只绑定 127.0.0.1，放同机反代后按真实客户端 IP 限流/锁定
+      ARTEX_TRUST_PROXY_HEADERS: ${ARTEX_TRUST_PROXY_HEADERS:-}
+      # stdio MCP 加固（默认留空 = 保持旧行为）
+      ARTEX_MCP_STDIO_DISABLED: ${ARTEX_MCP_STDIO_DISABLED:-}
+      ARTEX_MCP_STDIO_ALLOWLIST: ${ARTEX_MCP_STDIO_ALLOWLIST:-}
+      ARTEX_MCP_STDIO_RUN_AS: ${ARTEX_MCP_STDIO_RUN_AS:-}
     ports:
-      - "8787:8787"
+      # 管理端口只绑定宿主机回环：公网访问必须经同机/可信反代（见 README
+      # 「反向代理部署」）。容器内仍监听 0.0.0.0，Dockerfile CMD 显式传 -addr :8787。
+      - "127.0.0.1:8787:8787"
       - "127.0.0.1:8788:8788"
     volumes:
       # 把数据目录（含 jwt.key、SQLite 等）绑定到项目根目录的 data/，
