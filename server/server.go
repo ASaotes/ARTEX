@@ -46,6 +46,11 @@ type Server struct {
 	skillDir string // root directory for skill subdirectories
 	jwtKey   []byte // HS256 signing key loaded from / generated into dataDir/jwt.key
 
+	// authOnce guards lazy construction of auth (rate limit / lockout / init
+	// concurrency state). Kept off the hot path: only /api/auth/* touches it.
+	authOnce sync.Once
+	auth     *authGuard
+
 	// concMu serializes concurrency-cap decisions (admission + reconcile) so a
 	// scheduler tick and an HTTP settings change / task creation can't both count
 	// free slots off the same snapshot and over-promote past the limit.
