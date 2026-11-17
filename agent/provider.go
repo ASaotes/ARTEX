@@ -269,6 +269,10 @@ func (c Config) NewProvider() (llm.Provider, error) {
 	// 可只发 thinking.type、只发 effort、都发、或都不发。
 	lc.ThinkingType = c.ThinkingType
 	lc.ReasoningEffort = c.ReasoningEffort
+	// 非 thinking 模式的请求不回显 reasoning_content:回显只在 thinking 模式下
+	// 被 DeepSeek 系端点要求;Mistral 等严格 schema 直接禁止该字段
+	// (422 extra_forbidden),压缩层的占位符同样会被拒。
+	lc.OmitReasoningContent = c.ThinkingType == "" && c.ReasoningEffort == ""
 	// 输出上限的字段名选择(空 = 用 max_tokens)。上限的「值」不在这里:它每轮随
 	// agentcore.Options.MaxTokens 走,provider 只决定把它塞进哪个键。
 	lc.MaxTokensField = c.MaxTokensField
